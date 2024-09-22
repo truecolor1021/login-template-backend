@@ -1,81 +1,65 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const keys = require("../config/keys.config");
-
 const validateRegisterInput = require("../validation/register.validation");
 const validateLoginInput = require("../validation/login.validation");
-
 const User = require("../models/user.model");
 
-exports.register = (req, res) => {
-  const { errors, isValid } = validateRegisterInput(req.body);
+exports.register = async (firstName, lastName, email, password, password2) => {
+  const { errors, isValid } = validateRegisterInput({
+    firstName,
+    lastName,
+    email,
+    password,
+    password2,
+  });
 
   if (!isValid) {
-    return res.status(400).json(errors);
+    throw new Error(JSON.stringify(errors));
   }
 
-  User.findOne({ email: req.body.email }).then((user) => {
-    if (user) {
-      return res.status(400).json({ email: "Email already exists" });
-    } else {
-      const createUser = new User({
-        firstName: req.body.firstName,
-        lastName: req.body.lastName,
-        email: req.body.email,
-        password: req.body.password,
-      });
-      bcrypt.genSalt(10, (err, salt) => {
-        bcrypt.hash(createUser.password, salt, (err, hash) => {
-          if (err) throw err;
-          createUser.password = hash;
-          createUser
-            .save()
-            .then(() => res.json({ success: true }))
-            .catch((err) => console.log(err));
-        });
-      });
-    }
+  const userExists = await User.findOne({ email });
+  if (userExists) {
+    throw new Error("Email already exists");
+  }
+
+  const newUser = new User({
+    firstName,
+    lastName,
+    email,
+    password,
   });
+
+  const salt = await bcrypt.genSalt(10);
+  newUser.password = await bcrypt.hash(password, salt);
+  await newUser.save();
+
+  return "success";
 };
 
-exports.login = (req, res) => {
-  const { errors, isValid } = validateLoginInput(req.body);
+exports.login = async (email, password) => {
+  const { errors, isValid } = validateLoginInput({ email, password });
   if (!isValid) {
-    return res.status(400).json(errors);
+    throw new Error(JSON.stringify(errors));
   }
 
-  const email = req.body.email;
-  const password = req.body.password;
+  const user = await User.findOne({ email });
+  if (!user) {
+    throw new Error("Email not found");
+  }
 
-  User.findOne({ email }).then((user) => {
-    if (!user) {
-      return res.status(404).json({ email: "Email not found" });
-    }
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    throw new Error("Password incorrect");
+  }
 
-    bcrypt.compare(password, user.password).then((isMatch) => {
-      if (isMatch) {
-        const payload = {
-          id: user.id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-        };
-        jwt.sign(
-          payload,
-          keys.secretOrKey,
-          {
-            expiresIn: 7776000, // 90 days
-          },
-          (err, token) => {
-            if (err) {
-              return res.status(500).json({ error: "Error signing token" });
-            }
-            res.json({ token: `Bearer ${token}` });
-          }
-        );
-      } else {
-        return res.status(400).json({ password: "Password incorrect" });
-      }
-    });
-  });
+  const payload = {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+  };
+
+  const token = jwt.sign(payload, keys.secretOrKey, { expiresIn: 7776000 });
+  return token;
 };
